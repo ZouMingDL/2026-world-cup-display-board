@@ -1,0 +1,6 @@
+{
+  "name": "2026年世界杯球队与球员数据分析",
+  "description": "2026年世界杯参赛国家队的详细盘点、阵容流转、历史战绩与出线历程。提供每位参赛球员的高清头像展示、核心技术指标雷达图、以及支持多维度交互式球员实力对比看板。支持按身价和商业价值降序排行球队及球员。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
