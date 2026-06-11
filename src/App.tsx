@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Trophy, 
   Users, 
@@ -22,12 +22,13 @@ import {
   ChevronLeft
 } from 'lucide-react';
 import { worldCupData, Player, Team, QualifierNode } from './data/worldCupData';
+import { fetchAllMatches, WorldCupMatch } from './scripts/fetchWorldCupData';
 import RadarChart from './components/RadarChart';
 import WeChatFrame from './components/WeChatFrame';
 
 export default function App() {
   // Navigation & View States
-  const [activeTab, setActiveTab] = useState<'teams' | 'rankings' | 'compare'>('teams');
+  const [activeTab, setActiveTab] = useState<'teams' | 'rankings' | 'compare' | 'schedule'>('teams');
   
   // Drilldown States
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -45,6 +46,12 @@ export default function App() {
   // Comparison State (Pre-populate with Messi and Mbappe for instant elite display)
   const [comparePlayerIds, setComparePlayerIds] = useState<string[]>(['p_messi', 'p_mbappe']);
   const [isAddingToCompare, setIsAddingToCompare] = useState(false);
+
+  // Schedule States
+  const [scheduleMatches, setScheduleMatches] = useState<WorldCupMatch[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [scheduleFilter, setScheduleFilter] = useState<'all' | 'upcoming' | 'finished'>('all');
 
   // Helper getters
   const selectedTeam = useMemo(() => {
@@ -91,6 +98,23 @@ export default function App() {
       .filter((p): p is Player => !!p);
   }, [comparePlayerIds]);
 
+  // Schedule data fetching
+  useEffect(() => {
+    if (activeTab === 'schedule' && scheduleMatches.length === 0) {
+      setScheduleLoading(true);
+      setScheduleError(null);
+      fetchAllMatches()
+        .then(matches => {
+          setScheduleMatches(matches);
+          setScheduleLoading(false);
+        })
+        .catch(() => {
+          setScheduleError('赛程数据加载失败，请稍后重试');
+          setScheduleLoading(false);
+        });
+    }
+  }, [activeTab, scheduleMatches.length]);
+
   // Format monetary value nicely (万欧元 to Simplified Chinese display e.g. "x.x亿" or "xxxx万")
   const formatCurrency = (val: number) => {
     if (val >= 10000) {
@@ -98,6 +122,60 @@ export default function App() {
     }
     return `€${val}万`;
   };
+
+  // Format schedule date to Chinese display
+  const formatScheduleDate = (dateStr: string) => {
+    const d = new Date(dateStr + 'T00:00:00');
+    const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+    return `${d.getMonth() + 1}月${d.getDate()}日 周${weekdays[d.getDay()]}`;
+  };
+
+  // Convert UTC time string to China time (UTC+8)
+  const formatToChinaTime = (timeStr: string | null): string => {
+    if (!timeStr) return '--:--';
+    const [h, m] = timeStr.split(':').map(Number);
+    const chinaHour = (h + 8) % 24;
+    return `${String(chinaHour).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  };
+
+  // Get China date key for grouping (UTC date + time, converted to China timezone)
+  const getChinaDateKey = (dateStr: string, timeStr: string | null): string => {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const h = timeStr ? parseInt(timeStr.split(':')[0], 10) : 0;
+    const chinaHour = h + 8;
+    let chinaDay = day;
+    let chinaMonth = month;
+    let chinaYear = year;
+    if (chinaHour >= 24) {
+      chinaDay += 1;
+      const daysInMonth = new Date(chinaYear, chinaMonth, 0).getDate();
+      if (chinaDay > daysInMonth) {
+        chinaDay = 1;
+        chinaMonth += 1;
+        if (chinaMonth > 12) {
+          chinaMonth = 1;
+          chinaYear += 1;
+        }
+      }
+    }
+    return `${chinaYear}-${String(chinaMonth).padStart(2, '0')}-${String(chinaDay).padStart(2, '0')}`;
+  };
+
+  // Group schedule by date (using China timezone)
+  const groupedSchedule = useMemo(() => {
+    const filtered = scheduleMatches.filter(m => {
+      if (scheduleFilter === 'upcoming') return m.status === 'NS';
+      if (scheduleFilter === 'finished') return m.status === 'FT';
+      return true;
+    });
+    const groups: Record<string, WorldCupMatch[]> = {};
+    for (const match of filtered) {
+      const dateKey = getChinaDateKey(match.date, match.time);
+      if (!groups[dateKey]) groups[dateKey] = [];
+      groups[dateKey].push(match);
+    }
+    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
+  }, [scheduleMatches, scheduleFilter]);
 
   // Safe navigation handlers
   const handleSelectTeam = (teamId: string) => {
@@ -151,6 +229,9 @@ export default function App() {
     }
     if (activeTab === 'compare') {
       return '多员核心指标对拆对比';
+    }
+    if (activeTab === 'schedule') {
+      return '2026世界杯赛程';
     }
     return '2026年世界杯球队与球员数据看板';
   }, [activeTab, selectedTeamId, selectedTeam, selectedPlayerId, selectedPlayer]);
@@ -1232,8 +1313,178 @@ export default function App() {
             </div>
           )}
 
+          {/* 4. SCHEDULE TAB */}
+          {activeTab === 'schedule' && (
+            <div className="flex-1 flex flex-col bg-slate-50 overflow-hidden" id="schedule_tab">
+              {/* Filter bar */}
+              <div className="flex items-center gap-2 p-3 bg-white border-b border-slate-200 shrink-0">
+                {[
+                  { key: 'all' as const, label: '全部' },
+                  { key: 'upcoming' as const, label: '未开始' },
+                  { key: 'finished' as const, label: '已结束' },
+                ].map(f => (
+                  <button
+                    key={f.key}
+                    onClick={() => setScheduleFilter(f.key)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                      scheduleFilter === f.key
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+                <span className="ml-auto text-[9px] text-slate-400">* 北京时间</span>
+              </div>
+
+              {/* Content area */}
+              <div className="flex-1 overflow-y-auto">
+                {scheduleLoading && (
+                  <div className="flex flex-col items-center justify-center py-20">
+                    <div className="w-8 h-8 border-3 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mb-3" />
+                    <span className="text-xs text-slate-400">正在加载赛程数据...</span>
+                  </div>
+                )}
+
+                {scheduleError && (
+                  <div className="flex flex-col items-center justify-center py-20 px-6">
+                    <div className="w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mb-3">
+                      <span className="text-2xl">!</span>
+                    </div>
+                    <span className="text-sm text-slate-600 text-center">{scheduleError}</span>
+                    <button
+                      onClick={() => {
+                        setScheduleLoading(true);
+                        setScheduleError(null);
+                        fetchAllMatches()
+                          .then(matches => {
+                            setScheduleMatches(matches);
+                            setScheduleLoading(false);
+                          })
+                          .catch(() => {
+                            setScheduleError('赛程数据加载失败，请稍后重试');
+                            setScheduleLoading(false);
+                          });
+                      }}
+                      className="mt-3 px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-colors"
+                    >
+                      重新加载
+                    </button>
+                  </div>
+                )}
+
+                {!scheduleLoading && !scheduleError && groupedSchedule.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-20">
+                    <Calendar className="w-10 h-10 text-slate-300 mb-2" />
+                    <span className="text-sm text-slate-400">暂无赛程数据</span>
+                  </div>
+                )}
+
+                {!scheduleLoading && !scheduleError && groupedSchedule.map(([date, matches]) => (
+                  <div key={date}>
+                    {/* Date group header */}
+                    <div className="sticky top-0 bg-slate-100/95 backdrop-blur-sm px-4 py-2 text-xs font-bold text-slate-500 border-b border-slate-200/50 z-10">
+                      {formatScheduleDate(date)} · {matches.length}场比赛
+                    </div>
+                    {/* Match cards */}
+                    <div className="p-3 space-y-2.5">
+                      {matches.map(match => (
+                        <div
+                          key={match.id}
+                          className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-xs"
+                        >
+                          {/* Status badge */}
+                          <div className="flex items-center justify-between mb-2.5">
+                            <div className="flex items-center space-x-1.5">
+                              {match.round && (
+                                <span className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
+                                  第{match.round}轮
+                                </span>
+                              )}
+                              {match.country && (
+                                <span className="text-[9px] text-slate-400 flex items-center">
+                                  <MapPin className="w-2.5 h-2.5 mr-0.5" />
+                                  {match.country}
+                                </span>
+                              )}
+                            </div>
+                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                              match.status === 'FT'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : match.status === 'NS'
+                                ? 'bg-slate-100 text-slate-500'
+                                : 'bg-orange-50 text-orange-600'
+                            }`}>
+                              {match.status === 'FT' ? '已结束' : match.status === 'NS' ? '未开始' : match.status}
+                            </span>
+                          </div>
+
+                          {/* Teams row */}
+                          <div className="flex items-center justify-between">
+                            {/* Home team */}
+                            <div className="flex items-center space-x-2 flex-1 min-w-0">
+                              <img
+                                src={match.homeTeamBadge}
+                                alt={match.homeTeam}
+                                referrerPolicy="no-referrer"
+                                className="w-8 h-8 object-contain rounded bg-slate-50"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                              <span className="text-sm font-bold text-slate-800 truncate">{match.homeTeam}</span>
+                            </div>
+
+                            {/* Score / VS */}
+                            <div className="mx-3 flex flex-col items-center shrink-0">
+                              {match.status === 'FT' && match.homeScore != null && match.awayScore != null ? (
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="text-lg font-black text-slate-900 font-mono">{match.homeScore}</span>
+                                  <span className="text-xs text-slate-400 font-bold">:</span>
+                                  <span className="text-lg font-black text-slate-900 font-mono">{match.awayScore}</span>
+                                </div>
+                              ) : (
+                                <span className="text-xs font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded">VS</span>
+                              )}
+                              <span className="text-[9px] text-slate-400 mt-0.5">
+                                {formatToChinaTime(match.time)}
+                              </span>
+                            </div>
+
+                            {/* Away team */}
+                            <div className="flex items-center space-x-2 flex-1 min-w-0 justify-end">
+                              <span className="text-sm font-bold text-slate-800 truncate text-right">{match.awayTeam}</span>
+                              <img
+                                src={match.awayTeamBadge}
+                                alt={match.awayTeam}
+                                referrerPolicy="no-referrer"
+                                className="w-8 h-8 object-contain rounded bg-slate-50"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Venue */}
+                          {match.venue && (
+                            <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center text-[9px] text-slate-400">
+                              <MapPin className="w-2.5 h-2.5 mr-1 shrink-0" />
+                              <span className="truncate">{match.venue}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* -------------------- MOCK WECHAT TAB BAR BOTTOM PANEL -------------------- */}
-          <div className="bg-[#ffffff] border-t border-slate-200/80 p-1 shrink-0 grid grid-cols-3 select-none text-center">
+          <div className="bg-[#ffffff] border-t border-slate-200/80 p-1 shrink-0 grid grid-cols-4 select-none text-center">
             
             {/* TAB button 1 */}
             <button
@@ -1281,6 +1532,22 @@ export default function App() {
             >
               <Users className="w-5 h-5 mb-0.5" />
               <span className="text-[10px] tracking-wide">球员对拆</span>
+            </button>
+
+            {/* TAB button 4 */}
+            <button
+              id="tab-btn-schedule"
+              onClick={() => {
+                setActiveTab('schedule');
+                setSelectedTeamId(null);
+                setSelectedPlayerId(null);
+              }}
+              className={`flex flex-col items-center justify-center py-2 transition-all cursor-pointer ${
+                activeTab === 'schedule' ? 'text-emerald-650 font-bold scale-102' : 'text-slate-450 hover:text-slate-600'
+              }`}
+            >
+              <Calendar className="w-5 h-5 mb-0.5" />
+              <span className="text-[10px] tracking-wide">赛程</span>
             </button>
 
           </div>
