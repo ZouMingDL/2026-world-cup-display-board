@@ -1,92 +1,7 @@
-import { fifaRankings } from './fifaRankings';
-import { playerDatabase } from './playerDatabase';
-
-export interface Ability {
-  pace: number;
-  shooting: number;
-  passing: number;
-  dribbling: number;
-  defending: number;
-  physical: number;
-}
-
-export interface MatchStats {
-  appearances: number;
-  goals: number;
-  assists: number;
-  keyPasses: number;
-  interceptions: number;
-  rating: number;
-  cleanSheets?: number;
-  passSuccess?: number;
-  tackles?: number;
-  distance?: number;
-  recentRatings?: number[];
-}
-
-export interface Player {
-  id: string;
-  name: string;
-  englishName: string;
-  avatarUrl: string;
-  teamId: string;
-  teamName: string;
-  age: number;
-  position: 'FW' | 'MF' | 'DF' | 'GK';
-  positionName: string;
-  club: string;
-  marketValue: number;
-  commercialValue: number;
-  isStar: boolean;
-  shirtNumber: number;
-  ability: Ability;
-  matchStats: MatchStats;
-}
-
-export interface QualifierNode {
-  stage: string;
-  opponent: string;
-  score: string;
-  status: 'win' | 'draw' | 'loss';
-  desc: string;
-}
-
-export interface FormationPlayer {
-  positionId: string;
-  role: string;
-  playerName: string;
-  coord: { x: number; y: number };
-}
-
-export interface Formation {
-  name: string;
-  positions: FormationPlayer[];
-}
-
-export interface TeamHistoryStats {
-  appearances: number;
-  matchesPlayed: number;
-  wins: number;
-  draws: number;
-  losses: number;
-}
-
-export interface Team {
-  id: string;
-  name: string;
-  logoUrl: string;
-  region: string;
-  strengthRank: number;
-  bestRecord: string;
-  historyStats: TeamHistoryStats;
-  qualifierRoad: QualifierNode[];
-  formation: Formation;
-}
-
-export interface WorldCupDataset {
-  teams: Team[];
-  players: Player[];
-}
+import { fetchAllTeams, fetchAllMatches, getTeamId, getTeamChineseName } from './fetchWorldCupData';
+import { fifaRankings } from '../data/fifaRankings';
+import { playerDatabase } from '../data/playerDatabase';
+import { Team, Player, WorldCupDataset, QualifierNode, Formation, FormationPlayer, TeamHistoryStats } from '../types/worldCup';
 
 const TEAM_HISTORY: Record<string, TeamHistoryStats> = {
   ARG: { appearances: 18, matchesPlayed: 88, wins: 49, draws: 16, losses: 23 },
@@ -386,72 +301,59 @@ function generateFormation(teamId: string): Formation {
   };
 }
 
-function generateAbility(player: any): Ability {
-  const positionFactors: Record<string, { pace: number; shooting: number; passing: number; dribbling: number; defending: number; physical: number }> = {
-    FW: { pace: 85, shooting: 88, passing: 72, dribbling: 82, defending: 35, physical: 68 },
-    MF: { pace: 72, shooting: 75, passing: 85, dribbling: 80, defending: 65, physical: 72 },
-    DF: { pace: 70, shooting: 45, passing: 65, dribbling: 60, defending: 88, physical: 85 },
-    GK: { pace: 50, shooting: 20, passing: 60, dribbling: 40, defending: 85, physical: 80 },
-  };
-
-  const factors = positionFactors[player.position] || positionFactors.MF;
-  const starBonus = player.isStar ? 8 : 0;
-  const ageFactor = player.age > 35 ? -5 : player.age < 23 ? 3 : 0;
-
+function convertPlayerToFullPlayer(dbPlayer: any): Player {
   return {
-    pace: Math.min(99, Math.max(30, factors.pace + Math.floor(Math.random() * 15 - 7) + starBonus + ageFactor)),
-    shooting: Math.min(99, Math.max(20, factors.shooting + Math.floor(Math.random() * 15 - 7) + starBonus)),
-    passing: Math.min(99, Math.max(30, factors.passing + Math.floor(Math.random() * 15 - 7) + starBonus)),
-    dribbling: Math.min(99, Math.max(30, factors.dribbling + Math.floor(Math.random() * 15 - 7) + starBonus)),
-    defending: Math.min(99, Math.max(15, factors.defending + Math.floor(Math.random() * 15 - 7) + (player.position === 'DF' ? starBonus : 0))),
-    physical: Math.min(99, Math.max(40, factors.physical + Math.floor(Math.random() * 15 - 7) + (player.position === 'DF' || player.position === 'GK' ? starBonus : 0))),
-  };
-}
-
-function generateMatchStats(player: any): MatchStats {
-  const baseAppearances = player.isStar ? Math.floor(Math.random() * 4 + 8) : Math.floor(Math.random() * 6 + 4);
-  const positionGoals: Record<string, [number, number]> = {
-    FW: [5, 15],
-    MF: [1, 8],
-    DF: [0, 3],
-    GK: [0, 0],
-  };
-  const [minGoals, maxGoals] = positionGoals[player.position] || [0, 5];
-
-  return {
-    appearances: baseAppearances,
-    goals: Math.floor(Math.random() * (maxGoals - minGoals) + minGoals),
-    assists: Math.floor(Math.random() * 8),
-    keyPasses: Number((Math.random() * 3 + 0.5).toFixed(1)),
-    interceptions: Number((Math.random() * 2 + 0.2).toFixed(1)),
-    rating: Number((Math.random() * 1.5 + 6.8).toFixed(2)),
-  };
-}
-
-function generatePlayers(): Player[] {
-  return playerDatabase.map(dbPlayer => ({
     ...dbPlayer,
-    avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(dbPlayer.englishName)}&background=random&color=fff&size=150&bold=true`,
-    ability: generateAbility(dbPlayer),
-    matchStats: generateMatchStats(dbPlayer),
-  }));
+    ability: {
+      pace: Math.floor(Math.random() * 30 + 60),
+      shooting: Math.floor(Math.random() * 30 + 50),
+      passing: Math.floor(Math.random() * 30 + 55),
+      dribbling: Math.floor(Math.random() * 30 + 55),
+      defending: Math.floor(Math.random() * 30 + 40),
+      physical: Math.floor(Math.random() * 30 + 55),
+    },
+    matchStats: {
+      appearances: Math.floor(Math.random() * 10 + 5),
+      goals: Math.floor(Math.random() * 8),
+      assists: Math.floor(Math.random() * 6),
+      keyPasses: Number((Math.random() * 3 + 0.5).toFixed(1)),
+      interceptions: Number((Math.random() * 2 + 0.2).toFixed(1)),
+      rating: Number((Math.random() * 2 + 6.5).toFixed(2)),
+    },
+  };
 }
 
-function generateTeams(): Team[] {
-  return fifaRankings.map(ranking => ({
-    id: ranking.teamId,
-    name: ranking.teamName,
-    logoUrl: `https://flagcdn.com/w160/${ranking.teamId.toLowerCase()}.png`,
-    region: TEAM_REGION[ranking.teamId] || '未知',
-    strengthRank: ranking.rank,
-    bestRecord: TEAM_BEST_RECORD[ranking.teamId] || '未获得过名次',
-    historyStats: TEAM_HISTORY[ranking.teamId] || { appearances: 0, matchesPlayed: 0, wins: 0, draws: 0, losses: 0 },
-    qualifierRoad: generateQualifierRoad(ranking.teamId),
-    formation: generateFormation(ranking.teamId),
-  }));
-}
+export async function generateWorldCupData(): Promise<WorldCupDataset> {
+  console.log('正在获取世界杯数据...');
 
-export const worldCupData: WorldCupDataset = {
-  teams: generateTeams(),
-  players: generatePlayers(),
-};
+  const teams: Team[] = [];
+  const allPlayers: Player[] = [];
+
+  for (const ranking of fifaRankings) {
+    const teamId = ranking.teamId;
+
+    const team: Team = {
+      id: teamId,
+      name: ranking.teamName,
+      logoUrl: `https://flagcdn.com/w160/${teamId.toLowerCase()}.png`,
+      region: TEAM_REGION[teamId] || '未知',
+      strengthRank: ranking.rank,
+      bestRecord: TEAM_BEST_RECORD[teamId] || '未获得过名次',
+      historyStats: TEAM_HISTORY[teamId] || { appearances: 0, matchesPlayed: 0, wins: 0, draws: 0, losses: 0 },
+      qualifierRoad: generateQualifierRoad(teamId),
+      formation: generateFormation(teamId),
+    };
+
+    teams.push(team);
+
+    const teamPlayers = playerDatabase.filter(p => p.teamId === teamId);
+    for (const dbPlayer of teamPlayers) {
+      const fullPlayer = convertPlayerToFullPlayer(dbPlayer);
+      allPlayers.push(fullPlayer);
+    }
+  }
+
+  console.log(`已生成 ${teams.length} 支球队和 ${allPlayers.length} 名球员数据`);
+
+  return { teams, players: allPlayers };
+}
